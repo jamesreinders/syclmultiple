@@ -80,29 +80,82 @@ int main(int argc, char* argv[]) {
   auto filter = util::generate_filter(util::filter_type::blur, filterWidth,
                                       inImage.channels());
 
-  try {
-    sycl::queue myQueue1(sycl::property::queue::enable_profiling{});
-    // sycl::queue myQueue1{sycl::gpu_selector_v};
 
+  //
+  // This code tries to grab up to 100 (MAXDEVICES) GPUs.
+  // If there are no GPUs, it will get a default device.
+  //
+#define MAXDEVICES 100
+
+  sycl::queue myQueues[MAXDEVICES];
+  int howmany_devices = 0;
+  try {
+    auto P = sycl::platform(sycl::gpu_selector_v);
+    auto RootDevices = P.get_devices();
+    // auto C = sycl::context(RootDevices);
+    for (auto &D : RootDevices) {
+      myQueues[howmany_devices++] = sycl::queue(D,sycl::property::queue::enable_profiling{});
+      if (howmany_devices >= MAXDEVICES)
+	break;
+    }
+  } 
+  catch (sycl::exception e) {
+    howmany_devices = 1;
+    myQueues[0] = sycl::queue(sycl::property::queue::enable_profiling{});
+  }
+
+#ifdef DEBUGDUMP
+  for (int i = 0; i < howmany_devices; ++i) {
+    std::cout << "Device: "
+	      << myQueues[i].get_device().get_info<sycl::info::device::name>()
+	      << " MaxComputeUnits: " << myQueues[i].get_device().get_info<sycl::info::device::max_compute_units>();
+    if (myQueues[i].get_device().has(sycl::aspect::ext_intel_device_info_uuid)) {
+      auto UUID = myQueues[i].get_device().get_info<sycl::ext::intel::info::device::uuid>();
+      char foo[1024];
+      sprintf(foo,"\nUUID = %u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u",
+	      UUID[0],UUID[1],UUID[2],UUID[3],UUID[4],UUID[5],UUID[6],UUID[7],
+	      UUID[8],UUID[9],UUID[10],UUID[11],UUID[12],UUID[13],UUID[14],UUID[15]);
+      std::cout << foo;
+    }
+    std::cout << "\n";
+  }
+#endif
+
+  try {
+    sycl::queue myQueue1 = myQueues[0];
 
    
 #ifdef MYDEBUGS
     std::cout << "Running on "
-              << myQueue1.get_device().get_info<sycl::info::device::name>()
+              << myQueue1.get_device().get_info<sycl::info::device::name>();
 #ifdef SYCL_EXT_INTEL_DEVICE_INFO
-              << " device UUID = " << myQueue1.get_device().get_info<sycl::ext::intel::info::device::device_id>()
+#if SYCL_EXT_INTEL_DEVICE_INFO >= 2
+    if (myQueue1.get_device().has(sycl::aspect::ext_intel_device_info_uuid)) {
+      auto UUID = myQueue1.get_device().get_info<sycl::ext::intel::info::device::uuid>();
+      char foo[1024];
+      sprintf(foo,"\nUUID = %u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u",UUID[0],UUID[1],UUID[2],UUID[3],UUID[4],UUID[5],UUID[6],UUID[7],UUID[8],UUID[9],UUID[10],UUID[11],UUID[12],UUID[13],UUID[14],UUID[15]);
+      std::cout << foo;
+    }
 #endif
-              << "\n";
+#endif
+    std::cout << "\n";
 #endif
 
 #ifdef DOUBLETROUBLE
-    sycl::queue myQueue2(sycl::property::queue::enable_profiling{});
+    sycl::queue myQueue2 = myQueues[ (howmany_devices > 1) ? 1 : 0 ];
     std::cout << "Second queue is running on "
-              << myQueue2.get_device().get_info<sycl::info::device::name>()
+              << myQueue2.get_device().get_info<sycl::info::device::name>();
 #ifdef SYCL_EXT_INTEL_DEVICE_INFO
-              << " device UUID = " << myQueue2.get_device().get_info<sycl::ext::intel::info::device::device_id>()
+#if SYCL_EXT_INTEL_DEVICE_INFO >= 2
+    if (myQueue2.get_device().has(sycl::aspect::ext_intel_device_info_uuid)) {
+      auto UUID = myQueue2.get_device().get_info<sycl::ext::intel::info::device::uuid>();
+      char foo[1024];
+      sprintf(foo,"\nUUID = %u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u",UUID[0],UUID[1],UUID[2],UUID[3],UUID[4],UUID[5],UUID[6],UUID[7],UUID[8],UUID[9],UUID[10],UUID[11],UUID[12],UUID[13],UUID[14],UUID[15]);
+      std::cout << foo;
+    }
 #endif
-              << "\n";
+#endif
+    std::cout << "\n";
 #endif
 
 #ifdef MYDEBUGS
@@ -147,7 +200,7 @@ int main(int argc, char* argv[]) {
             d *= i;
           }
           outAccessor[hold++] = c + d / 10000;
-          c = d % 10000;
+	  c = d % 10000;
         }
       });
     });
@@ -259,9 +312,10 @@ int main(int argc, char* argv[]) {
               << " seconds)\n";
 
 #ifdef DOUBLETROUBLE
-    myQueue2.wait();
+    e2.wait(); // make sure all digits are done being computed
+    sycl::host_accessor myD4(outD4); // the scope of the buffer continues - so we must not use d4[] directly
     std::cout << "First 800 digits of pi: ";
-    for (int i = 0; i < 200; ++i) printf("%.4d", d4[i]);
+    for (int i = 0; i < 200; ++i) printf("%.4d", myD4[i]);
     std::cout << "\n";
 
     double time2A = (e2.template get_profiling_info<
